@@ -1,6 +1,9 @@
 import { DatabaseSync } from 'node:sqlite';
 
-const db = new DatabaseSync('reminders.db');
+const dbFilename =
+  process.env.NODE_ENV === 'production' ? 'reminders.production.db' : 'reminders.db';
+
+const db = new DatabaseSync(dbFilename);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS reminders (

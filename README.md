@@ -25,6 +25,7 @@ Discord上でスラッシュコマンドから自然言語でリマインドを�
 2. 左メニュー「Bot」を開き、「Add Bot」→「Reset Token」でBotトークンを取得します（`.env` の `DISCORD_TOKEN` に設定）。
 3. 「General Information」に表示される「Application ID」を `.env` の `CLIENT_ID` に設定します。
 4. 「Bot」ページの「Privileged Gateway Intents」は本Botでは不要です（デフォルトのまま）。
+5. テスト用Botと本番用Botは、Discord Developer Portal上で**別々のApplicationとして作成**してください（例: 「わすれニャン (dev)」「わすれニャン」）。それぞれ個別のトークン・Client IDが発行されるため、`.env`（テスト用）と `.env.production`（本番用）にそれぞれ設定します。本番用Applicationの作成自体はとしあき本人がDeveloper Portalで手動実施してください。
 
 ### 2. Botの権限設定（招待URLの発行）
 
@@ -56,6 +57,37 @@ npm start                 # Bot起動
 
 初回起動時に `reminders.db`（SQLiteファイル）がカレントディレクトリに自動作成されます。
 
+## 環境構築（テスト用/本番用）
+
+わすれニャンは `NODE_ENV` の値によって、読み込む環境変数ファイルとSQLiteのDBファイルを自動的に切り替えます。テスト用Botと本番用Botのトークン・データを完全に分離できるため、本番運用中でも安全にテスト用Botで動作確認ができます。
+
+| | テスト用 | 本番用 |
+| --- | --- | --- |
+| `NODE_ENV` | 未設定（またはproduction以外） | `production` |
+| 読み込む環境変数ファイル | `.env` | `.env.production` |
+| DBファイル | `reminders.db` | `reminders.production.db` |
+| コマンド登録スコープ | `.env`/`.env.production`の`GUILD_ID`の有無で決まる（下記参照） | 同左 |
+
+使い分け方:
+
+1. `.env.example` を `.env` としてコピーし、テスト用BotのトークンやClient IDを設定します（`NODE_ENV` は空のままでOKです）。
+2. 本番用には `.env.example` を `.env.production` としてコピーし、本番用BotのトークンやClient IDを設定した上で `NODE_ENV=production` を追記します。
+3. どちらのファイルも `.env`・`.env.production` ともにGit管理対象外です（`.env.example` のみコミットされます）。
+4. 起動・コマンド登録時に `NODE_ENV=production` を指定すると本番用の設定が使われます。
+
+```bash
+# テスト用Botとして起動（.env を読み込む）
+npm start
+
+# 本番用Botとして起動（.env.production を読み込む）
+NODE_ENV=production npm start
+
+# コマンド登録も同様にNODE_ENVで切り替え可能
+NODE_ENV=production npm run deploy-commands
+```
+
+コマンド登録スコープは、読み込まれた環境変数ファイル内の `GUILD_ID` の有無で自動的に決まります。`GUILD_ID` を設定していればそのギルドに限定登録（即時反映、テスト用向け）、未設定であればグローバル登録（本番用向け、反映まで最大1時間程度かかります）になります。
+
 ## DBスキーマ (`reminders` テーブル)
 
 | カラム | 型 | 説明 |
@@ -75,7 +107,7 @@ npm start                 # Bot起動
 
 ## systemdでの常駐運用（OCI VM想定）
 
-`systemd/wasurenyan.service` をサンプルとして同梱しています。
+`systemd/wasurenyan.service` をサンプルとして同梱しています。本番用Botとして常駐させるため、`Environment=NODE_ENV=production` を指定しています（`.env.production` を読み込み、DBも `reminders.production.db` に分離されます）。
 
 ```bash
 sudo useradd -r -s /usr/sbin/nologin wasurenyan   # 必要に応じて

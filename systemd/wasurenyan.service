@@ -8,8 +8,9 @@ Type=simple
 # デプロイ先に合わせて変更してください
 User=wasurenyan
 WorkingDirectory=/opt/wasurenyan
-EnvironmentFile=/opt/wasurenyan/.env
+EnvironmentFile=/opt/wasurenyan/.env.production
 Environment=TZ=Asia/Tokyo
+Environment=NODE_ENV=production
 ExecStart=/usr/bin/node index.js
 Restart=on-failure
 RestartSec=5

@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
+
+loadEnv({ path: process.env.NODE_ENV === 'production' ? '.env.production' : '.env' });
 
 function requireEnv(name) {
   const value = process.env[name];
