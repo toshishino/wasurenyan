@@ -1,0 +1,21 @@
+{
+  "name": "wasurenyan",
+  "version": "1.0.0",
+  "description": "Discordリマインドボット「わすれニャン」",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "deploy-commands": "node src/deploy-commands.js"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "chrono-node": "^2.7.7",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+}

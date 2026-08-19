@@ -1,0 +1,22 @@
+[Unit]
+Description=wasurenyan - Discord reminder bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# デプロイ先に合わせて変更してください
+User=wasurenyan
+WorkingDirectory=/opt/wasurenyan
+EnvironmentFile=/opt/wasurenyan/.env
+Environment=TZ=Asia/Tokyo
+ExecStart=/usr/bin/node index.js
+Restart=on-failure
+RestartSec=5
+
+# ログはjournalctl -u wasurenyanで確認できます
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
