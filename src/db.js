@@ -18,12 +18,22 @@ db.exec(`
     timezone TEXT NOT NULL DEFAULT 'Asia/Tokyo',
     next_trigger_at INTEGER NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    mention_targets TEXT NOT NULL DEFAULT '[]'
   );
 
   CREATE INDEX IF NOT EXISTS idx_reminders_due
     ON reminders (active, next_trigger_at);
 `);
+
+const hasMentionTargetsColumn = db
+  .prepare(`PRAGMA table_info(reminders)`)
+  .all()
+  .some((col) => col.name === 'mention_targets');
+
+if (!hasMentionTargetsColumn) {
+  db.exec(`ALTER TABLE reminders ADD COLUMN mention_targets TEXT NOT NULL DEFAULT '[]'`);
+}
 
 export function insertReminder({
   guildId,
@@ -35,12 +45,13 @@ export function insertReminder({
   timeOfDay,
   timezone,
   nextTriggerAt,
+  mentionTargets,
 }) {
   const stmt = db.prepare(`
     INSERT INTO reminders
       (guild_id, channel_id, user_id, content, recurrence_type, recurrence_value,
-       time_of_day, timezone, next_trigger_at, active, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+       time_of_day, timezone, next_trigger_at, active, created_at, mention_targets)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
   const result = stmt.run(
     guildId,
@@ -52,7 +63,8 @@ export function insertReminder({
     timeOfDay,
     timezone,
     nextTriggerAt,
-    Math.floor(Date.now() / 1000)
+    Math.floor(Date.now() / 1000),
+    JSON.stringify(mentionTargets ?? [])
   );
   return Number(result.lastInsertRowid);
 }

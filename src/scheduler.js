@@ -5,6 +5,7 @@ import {
   updateNextTrigger,
 } from './db.js';
 import { computeFollowingTriggerAt } from './datetime.js';
+import { buildMentionPrefix } from './mentions.js';
 
 export function startScheduler(client) {
   cron.schedule('* * * * *', () => checkAndFireReminders(client));
@@ -23,8 +24,15 @@ async function fireReminder(client, reminder) {
   try {
     const channel = await client.channels.fetch(reminder.channel_id);
     if (channel && channel.isTextBased()) {
+      let mentionTargets = [];
+      try {
+        mentionTargets = JSON.parse(reminder.mention_targets || '[]');
+      } catch {
+        mentionTargets = [];
+      }
+      const mentionPrefix = buildMentionPrefix(mentionTargets);
       await channel.send(
-        `🐾 <@${reminder.user_id}> リマインド: ${reminder.content}`
+        `${mentionPrefix}🐾 <@${reminder.user_id}> リマインド: ${reminder.content}`
       );
     }
   } catch (err) {

@@ -5,10 +5,14 @@ import {
   TextInputStyle,
   ActionRowBuilder,
   StringSelectMenuBuilder,
+  ChannelSelectMenuBuilder,
+  MentionableSelectMenuBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  SelectMenuDefaultValueType,
   EmbedBuilder,
   MessageFlags,
 } from 'discord.js';
-import { randomUUID } from 'node:crypto';
 import {
   insertReminder,
   listRemindersByUser,
@@ -20,12 +24,23 @@ import {
   recurrenceLabel,
   computeInitialNextTriggerAt,
 } from '../datetime.js';
+import { formatMentionTarget } from '../mentions.js';
 import { config } from '../config.js';
 
-// modal送信〜セレクトメニュー確定までの一時的な下書きを保持する
-// (draftId -> { content, date, timeOfDay, weekday, guildId, channelId, userId })
-const pendingDrafts = new Map();
+// modal送信〜登録ボタン押下までの一時的な下書きを保持する
+// (メッセージid -> { content, date, timeOfDay, weekday, guildId, userId,
+//                    defaultChannelId, channelId, mentionTargets, recurrenceType, recurrenceValue, updatedAt })
+const draftReminders = new Map();
 const DRAFT_TTL_MS = 10 * 60 * 1000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [messageId, draft] of draftReminders) {
+    if (now - draft.updatedAt > DRAFT_TTL_MS) {
+      draftReminders.delete(messageId);
+    }
+  }
+}, 60 * 1000).unref();
 
 export const data = new SlashCommandBuilder()
   .setName('remind')
@@ -97,62 +112,178 @@ export async function handleModalSubmit(interaction) {
     return;
   }
 
-  const draftId = randomUUID();
-  pendingDrafts.set(draftId, {
+  const draft = {
     content,
     date: parsed.date,
     timeOfDay: parsed.timeOfDay,
     weekday: parsed.weekday,
     guildId: interaction.guildId,
-    channelId: interaction.channelId,
     userId: interaction.user.id,
+    defaultChannelId: interaction.channelId,
+    channelId: interaction.channelId,
+    mentionTargets: [],
+    recurrenceType: null,
+    recurrenceValue: null,
+    updatedAt: Date.now(),
+  };
+
+  const response = await interaction.reply({
+    ...buildDraftMessage(draft),
+    flags: MessageFlags.Ephemeral,
+    withResponse: true,
   });
-  setTimeout(() => pendingDrafts.delete(draftId), DRAFT_TTL_MS).unref();
+
+  draftReminders.set(response.resource.message.id, draft);
+}
+
+function buildDraftMessage(draft) {
+  const mentionText =
+    draft.mentionTargets.length > 0
+      ? draft.mentionTargets.map(formatMentionTarget).join(' ')
+      : 'なし';
 
   const embed = new EmbedBuilder()
     .setTitle('リマインド内容の確認')
     .addFields(
-      { name: '内容', value: content },
-      { name: '日時', value: formatDateTimeJa(parsed.date) }
+      { name: '内容', value: draft.content },
+      { name: '日時', value: formatDateTimeJa(draft.date) },
+      { name: '投稿先チャンネル', value: `<#${draft.channelId}>` },
+      { name: 'メンション対象', value: mentionText },
+      {
+        name: '繰り返し',
+        value: draft.recurrenceType
+          ? recurrenceLabel(draft.recurrenceType, draft.recurrenceValue)
+          : '未選択（登録に必須です）',
+      }
     )
-    .setFooter({ text: '繰り返しを選択して登録を確定してください' })
+    .setFooter({ text: '各項目を選択し、「登録」ボタンで確定してください' })
     .setColor(0x8bc9ff);
 
-  const select = new StringSelectMenuBuilder()
-    .setCustomId(`remind_recurrence_select:${draftId}`)
-    .setPlaceholder('繰り返しを選択')
+  const channelSelect = new ChannelSelectMenuBuilder()
+    .setCustomId('remind_channel_select')
+    .setPlaceholder('投稿先チャンネル（未選択: 実行チャンネル）')
+    .setMinValues(0)
+    .setMaxValues(1)
+    .setDefaultChannels(draft.channelId);
+
+  const mentionableSelect = new MentionableSelectMenuBuilder()
+    .setCustomId('remind_mentionable_select')
+    .setPlaceholder('メンション対象（複数選択可、任意）')
+    .setMinValues(0)
+    .setMaxValues(10);
+  if (draft.mentionTargets.length > 0) {
+    mentionableSelect.setDefaultValues(
+      draft.mentionTargets.map((target) => ({
+        id: target.id,
+        type:
+          target.type === 'role'
+            ? SelectMenuDefaultValueType.Role
+            : SelectMenuDefaultValueType.User,
+      }))
+    );
+  }
+
+  const recurrenceSelect = new StringSelectMenuBuilder()
+    .setCustomId('remind_recurrence_select')
+    .setPlaceholder('繰り返しを選択（必須）')
     .addOptions(
-      { label: 'なし', description: '一度だけ通知します', value: 'once' },
-      { label: '毎日', description: '毎日同じ時刻に通知します', value: 'daily' },
-      { label: '毎週', description: '毎週同じ曜日・時刻に通知します', value: 'weekly' }
+      {
+        label: 'なし',
+        description: '一度だけ通知します',
+        value: 'once',
+        default: draft.recurrenceType === 'once',
+      },
+      {
+        label: '毎日',
+        description: '毎日同じ時刻に通知します',
+        value: 'daily',
+        default: draft.recurrenceType === 'daily',
+      },
+      {
+        label: '毎週',
+        description: '毎週同じ曜日・時刻に通知します',
+        value: 'weekly',
+        default: draft.recurrenceType === 'weekly',
+      }
     );
 
-  await interaction.reply({
+  const registerButton = new ButtonBuilder()
+    .setCustomId('remind_register_button')
+    .setLabel('登録')
+    .setStyle(ButtonStyle.Primary);
+
+  return {
     embeds: [embed],
-    components: [new ActionRowBuilder().addComponents(select)],
-    flags: MessageFlags.Ephemeral,
+    components: [
+      new ActionRowBuilder().addComponents(channelSelect),
+      new ActionRowBuilder().addComponents(mentionableSelect),
+      new ActionRowBuilder().addComponents(recurrenceSelect),
+      new ActionRowBuilder().addComponents(registerButton),
+    ],
+  };
+}
+
+function getActiveDraft(interaction) {
+  return draftReminders.get(interaction.message.id);
+}
+
+async function replyDraftExpired(interaction) {
+  await interaction.update({
+    content: 'この確認は期限切れです。もう一度 /remind add からやり直してください。',
+    embeds: [],
+    components: [],
   });
 }
 
-export async function handleRecurrenceSelect(interaction) {
-  const [, draftId] = interaction.customId.split(':');
-  const draft = pendingDrafts.get(draftId);
+export async function handleChannelSelect(interaction) {
+  const draft = getActiveDraft(interaction);
+  if (!draft) return replyDraftExpired(interaction);
 
-  if (!draft) {
-    await interaction.update({
-      content: 'この確認は期限切れです。もう一度 /remind add からやり直してください。',
-      embeds: [],
-      components: [],
+  draft.channelId = interaction.values[0] ?? draft.defaultChannelId;
+  draft.updatedAt = Date.now();
+
+  await interaction.update(buildDraftMessage(draft));
+}
+
+export async function handleMentionableSelect(interaction) {
+  const draft = getActiveDraft(interaction);
+  if (!draft) return replyDraftExpired(interaction);
+
+  draft.mentionTargets = interaction.values.map((id) => ({
+    id,
+    type: interaction.users.has(id) ? 'user' : 'role',
+  }));
+  draft.updatedAt = Date.now();
+
+  await interaction.update(buildDraftMessage(draft));
+}
+
+export async function handleRecurrenceSelect(interaction) {
+  const draft = getActiveDraft(interaction);
+  if (!draft) return replyDraftExpired(interaction);
+
+  const recurrenceType = interaction.values[0]; // 'once' | 'daily' | 'weekly'
+  draft.recurrenceType = recurrenceType;
+  draft.recurrenceValue = recurrenceType === 'weekly' ? String(draft.weekday) : null;
+  draft.updatedAt = Date.now();
+
+  await interaction.update(buildDraftMessage(draft));
+}
+
+export async function handleRegisterButton(interaction) {
+  const draft = getActiveDraft(interaction);
+  if (!draft) return replyDraftExpired(interaction);
+
+  if (!draft.recurrenceType) {
+    await interaction.reply({
+      content: '繰り返し設定を選んでください。',
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
 
-  const recurrenceType = interaction.values[0]; // 'once' | 'daily' | 'weekly'
-  const recurrenceValue =
-    recurrenceType === 'weekly' ? String(draft.weekday) : null;
-
   const nextTriggerAt = computeInitialNextTriggerAt({
-    recurrenceType,
+    recurrenceType: draft.recurrenceType,
     date: draft.date,
     timeOfDay: draft.timeOfDay,
     weekday: draft.weekday,
@@ -164,14 +295,20 @@ export async function handleRecurrenceSelect(interaction) {
     channelId: draft.channelId,
     userId: draft.userId,
     content: draft.content,
-    recurrenceType,
-    recurrenceValue,
+    recurrenceType: draft.recurrenceType,
+    recurrenceValue: draft.recurrenceValue,
     timeOfDay: draft.timeOfDay,
     timezone: config.timezone,
     nextTriggerAt,
+    mentionTargets: draft.mentionTargets,
   });
 
-  pendingDrafts.delete(draftId);
+  draftReminders.delete(interaction.message.id);
+
+  const mentionText =
+    draft.mentionTargets.length > 0
+      ? draft.mentionTargets.map(formatMentionTarget).join(' ')
+      : 'なし';
 
   const embed = new EmbedBuilder()
     .setTitle('リマインドを登録しました 🐾')
@@ -179,13 +316,15 @@ export async function handleRecurrenceSelect(interaction) {
       { name: 'ID', value: String(id), inline: true },
       {
         name: '繰り返し',
-        value: recurrenceLabel(recurrenceType, recurrenceValue),
+        value: recurrenceLabel(draft.recurrenceType, draft.recurrenceValue),
         inline: true,
       },
       {
         name: '次回発火',
         value: formatDateTimeJa(new Date(nextTriggerAt * 1000)),
       },
+      { name: '投稿先チャンネル', value: `<#${draft.channelId}>` },
+      { name: 'メンション対象', value: mentionText },
       { name: '内容', value: draft.content }
     )
     .setColor(0x8bc9ff);

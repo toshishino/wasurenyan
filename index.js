@@ -26,9 +26,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.isChannelSelectMenu()) {
+      if (interaction.customId === 'remind_channel_select') {
+        await remind.handleChannelSelect(interaction);
+      }
+      return;
+    }
+
+    if (interaction.isMentionableSelectMenu()) {
+      if (interaction.customId === 'remind_mentionable_select') {
+        await remind.handleMentionableSelect(interaction);
+      }
+      return;
+    }
+
     if (interaction.isStringSelectMenu()) {
-      if (interaction.customId.startsWith('remind_recurrence_select:')) {
+      if (interaction.customId === 'remind_recurrence_select') {
         await remind.handleRecurrenceSelect(interaction);
+      }
+      return;
+    }
+
+    if (interaction.isButton()) {
+      if (interaction.customId === 'remind_register_button') {
+        await remind.handleRegisterButton(interaction);
       }
       return;
     }
