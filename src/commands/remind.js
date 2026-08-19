@@ -1,5 +1,7 @@
 import {
   SlashCommandBuilder,
+  ContextMenuCommandBuilder,
+  ApplicationCommandType,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -36,6 +38,10 @@ import { config } from '../config.js';
 const draftReminders = new Map();
 const DRAFT_TTL_MS = 10 * 60 * 1000;
 
+// リマインド内容欄(remind_content)のsetMaxLengthと必ず一致させる
+const CONTENT_MAX_LENGTH = 500;
+const CONTENT_TRUNCATION_SUFFIX = '...(省略)';
+
 setInterval(() => {
   const now = Date.now();
   for (const [messageId, draft] of draftReminders) {
@@ -66,6 +72,10 @@ export const data = new SlashCommandBuilder()
       )
   );
 
+export const contextMenuData = new ContextMenuCommandBuilder()
+  .setName('このメッセージをリマインド')
+  .setType(ApplicationCommandType.Message);
+
 export async function execute(interaction) {
   const sub = interaction.options.getSubcommand();
   if (sub === 'add') return showAddModal(interaction);
@@ -73,7 +83,29 @@ export async function execute(interaction) {
   if (sub === 'delete') return handleDelete(interaction);
 }
 
-async function showAddModal(interaction) {
+export async function executeMessageContextMenu(interaction) {
+  const initialContent = buildContentFromMessage(interaction.targetMessage);
+  await showAddModal(interaction, { initialContent });
+}
+
+// 対象メッセージの本文+元メッセージへのリンクを「内容」欄の初期値として組み立てる
+// (本文が空=embedのみの場合はリンクだけになる)
+function buildContentFromMessage(message) {
+  const link = `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`;
+  const linkBlock = `\n\n元メッセージ: ${link}`;
+  const originalText = message.content ?? '';
+
+  const availableForBody = CONTENT_MAX_LENGTH - linkBlock.length;
+  let body = originalText;
+  if (body.length > availableForBody) {
+    const truncateAt = Math.max(0, availableForBody - CONTENT_TRUNCATION_SUFFIX.length);
+    body = body.slice(0, truncateAt) + CONTENT_TRUNCATION_SUFFIX;
+  }
+
+  return `${body}${linkBlock}`.trim();
+}
+
+async function showAddModal(interaction, { initialContent = '' } = {}) {
   const modal = new ModalBuilder()
     .setCustomId('remind_add_modal')
     .setTitle('リマインドを追加');
@@ -83,7 +115,10 @@ async function showAddModal(interaction) {
     .setLabel('リマインド内容')
     .setStyle(TextInputStyle.Paragraph)
     .setRequired(true)
-    .setMaxLength(500);
+    .setMaxLength(CONTENT_MAX_LENGTH);
+  if (initialContent) {
+    contentInput.setValue(initialContent);
+  }
 
   const datetimeInput = new TextInputBuilder()
     .setCustomId('remind_datetime')

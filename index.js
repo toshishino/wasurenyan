@@ -21,6 +21,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.isMessageContextMenuCommand()) {
+      if (interaction.commandName === remind.contextMenuData.name) {
+        await remind.executeMessageContextMenu(interaction);
+      }
+      return;
+    }
+
     if (interaction.isModalSubmit()) {
       await remind.handleModalSubmit(interaction);
       return;

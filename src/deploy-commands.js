@@ -1,8 +1,11 @@
 import { REST, Routes } from 'discord.js';
 import { config } from './config.js';
-import { data as remindCommand } from './commands/remind.js';
+import {
+  data as remindCommand,
+  contextMenuData as remindMessageContextMenu,
+} from './commands/remind.js';
 
-const commands = [remindCommand.toJSON()];
+const commands = [remindCommand.toJSON(), remindMessageContextMenu.toJSON()];
 const rest = new REST().setToken(config.discordToken);
 
 async function main() {
