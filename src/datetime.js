@@ -83,6 +83,52 @@ export function computeInitialNextTriggerAt({
   throw new Error(`unknown recurrenceType: ${recurrenceType}`);
 }
 
+export const DATETIME_PRESETS = [
+  { value: 'in_30_min', label: '30分後' },
+  { value: 'in_1_hour', label: '1時間後' },
+  { value: 'in_3_hours', label: '3時間後' },
+  { value: 'today_20', label: '今日20時' },
+  { value: 'tomorrow_9', label: '明日9時' },
+  { value: 'tomorrow_20', label: '明日20時' },
+  { value: 'next_monday_9', label: '来週月曜9時' },
+];
+
+// プリセット選択時の日時計算(サーバー時刻=Asia/Tokyoのウォールクロック基準)
+export function computePresetDateTime(presetValue, now = new Date()) {
+  const date = new Date(now);
+  switch (presetValue) {
+    case 'in_30_min':
+      date.setMinutes(date.getMinutes() + 30);
+      return date;
+    case 'in_1_hour':
+      date.setHours(date.getHours() + 1);
+      return date;
+    case 'in_3_hours':
+      date.setHours(date.getHours() + 3);
+      return date;
+    case 'today_20':
+      date.setHours(20, 0, 0, 0);
+      return date;
+    case 'tomorrow_9':
+      date.setDate(date.getDate() + 1);
+      date.setHours(9, 0, 0, 0);
+      return date;
+    case 'tomorrow_20':
+      date.setDate(date.getDate() + 1);
+      date.setHours(20, 0, 0, 0);
+      return date;
+    case 'next_monday_9': {
+      let diffDays = (1 - date.getDay() + 7) % 7;
+      if (diffDays === 0) diffDays = 7;
+      date.setDate(date.getDate() + diffDays);
+      date.setHours(9, 0, 0, 0);
+      return date;
+    }
+    default:
+      return null;
+  }
+}
+
 // 発火後の再計算: ドリフトを防ぐため直前のnext_trigger_atを基準に加算する
 export function computeFollowingTriggerAt(recurrenceType, prevTriggerAtUnix) {
   if (recurrenceType === 'daily') {

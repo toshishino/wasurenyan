@@ -21,15 +21,18 @@ import {
 import {
   parseReminderDateTime,
   formatDateTimeJa,
+  formatTimeOfDay,
   recurrenceLabel,
   computeInitialNextTriggerAt,
+  DATETIME_PRESETS,
+  computePresetDateTime,
 } from '../datetime.js';
 import { formatMentionTarget } from '../mentions.js';
 import { config } from '../config.js';
 
 // modal送信〜登録ボタン押下までの一時的な下書きを保持する
-// (メッセージid -> { content, date, timeOfDay, weekday, guildId, userId,
-//                    defaultChannelId, channelId, mentionTargets, recurrenceType, recurrenceValue, updatedAt })
+// (メッセージid -> { content, customDateTimeText, parsedDateTime, selectedPreset, guildId, userId,
+//                    defaultChannelId, channelId, mentionTargets, recurrenceType, updatedAt })
 const draftReminders = new Map();
 const DRAFT_TTL_MS = 10 * 60 * 1000;
 
@@ -84,9 +87,10 @@ async function showAddModal(interaction) {
 
   const datetimeInput = new TextInputBuilder()
     .setCustomId('remind_datetime')
-    .setLabel('日時 (例: 明日20時 / 毎週月曜21:00)')
+    .setLabel('日時（カスタム指定、任意）')
+    .setPlaceholder('プリセットで足りない場合のみ入力（例: 来月第3土曜 15時）')
     .setStyle(TextInputStyle.Short)
-    .setRequired(true)
+    .setRequired(false)
     .setMaxLength(100);
 
   modal.addComponents(
@@ -101,29 +105,20 @@ export async function handleModalSubmit(interaction) {
   if (interaction.customId !== 'remind_add_modal') return;
 
   const content = interaction.fields.getTextInputValue('remind_content');
-  const datetimeText = interaction.fields.getTextInputValue('remind_datetime');
-
-  const parsed = parseReminderDateTime(datetimeText, new Date());
-  if (!parsed) {
-    await interaction.reply({
-      content: `日時を解析できませんでした:「${datetimeText}」\n別の書き方でもう一度 /remind add を実行してください。`,
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
+  const customDateTimeText =
+    interaction.fields.getTextInputValue('remind_datetime').trim() || null;
 
   const draft = {
     content,
-    date: parsed.date,
-    timeOfDay: parsed.timeOfDay,
-    weekday: parsed.weekday,
+    customDateTimeText,
+    parsedDateTime: null,
+    selectedPreset: null,
     guildId: interaction.guildId,
     userId: interaction.user.id,
     defaultChannelId: interaction.channelId,
     channelId: interaction.channelId,
     mentionTargets: [],
     recurrenceType: null,
-    recurrenceValue: null,
     updatedAt: Date.now(),
   };
 
@@ -136,6 +131,31 @@ export async function handleModalSubmit(interaction) {
   draftReminders.set(response.resource.message.id, draft);
 }
 
+// 繰り返し(weekly)の曜日は日時が確定するまで決まらないため、都度算出する
+function currentRecurrenceValue(draft) {
+  if (draft.recurrenceType !== 'weekly') return null;
+  if (!draft.parsedDateTime) return null;
+  return String(draft.parsedDateTime.getDay());
+}
+
+function formatDraftDateTimeField(draft) {
+  if (draft.parsedDateTime) {
+    return `${formatDateTimeJa(draft.parsedDateTime)}\n(プリセット: ${draft.selectedPreset})`;
+  }
+  if (draft.customDateTimeText) {
+    return `カスタム入力:「${draft.customDateTimeText}」\n(登録時に解析されます)`;
+  }
+  return '未選択（プリセットまたはカスタム入力が必要です）';
+}
+
+function formatDraftRecurrenceField(draft) {
+  if (!draft.recurrenceType) return '未選択（登録に必須です）';
+  if (draft.recurrenceType === 'weekly' && !draft.parsedDateTime) {
+    return '毎週（曜日は日時確定後に決まります）';
+  }
+  return recurrenceLabel(draft.recurrenceType, currentRecurrenceValue(draft));
+}
+
 function buildDraftMessage(draft) {
   const mentionText =
     draft.mentionTargets.length > 0
@@ -146,15 +166,10 @@ function buildDraftMessage(draft) {
     .setTitle('リマインド内容の確認')
     .addFields(
       { name: '内容', value: draft.content },
-      { name: '日時', value: formatDateTimeJa(draft.date) },
+      { name: '日時', value: formatDraftDateTimeField(draft) },
       { name: '投稿先チャンネル', value: `<#${draft.channelId}>` },
       { name: 'メンション対象', value: mentionText },
-      {
-        name: '繰り返し',
-        value: draft.recurrenceType
-          ? recurrenceLabel(draft.recurrenceType, draft.recurrenceValue)
-          : '未選択（登録に必須です）',
-      }
+      { name: '繰り返し', value: formatDraftRecurrenceField(draft) }
     )
     .setFooter({ text: '各項目を選択し、「登録」ボタンで確定してください' })
     .setColor(0x8bc9ff);
@@ -207,6 +222,17 @@ function buildDraftMessage(draft) {
       }
     );
 
+  const presetSelect = new StringSelectMenuBuilder()
+    .setCustomId('datetime_preset')
+    .setPlaceholder('日時プリセットを選択')
+    .addOptions(
+      DATETIME_PRESETS.map((preset) => ({
+        label: preset.label,
+        value: preset.value,
+        default: draft.selectedPreset === preset.label,
+      }))
+    );
+
   const registerButton = new ButtonBuilder()
     .setCustomId('remind_register_button')
     .setLabel('登録')
@@ -218,6 +244,7 @@ function buildDraftMessage(draft) {
       new ActionRowBuilder().addComponents(channelSelect),
       new ActionRowBuilder().addComponents(mentionableSelect),
       new ActionRowBuilder().addComponents(recurrenceSelect),
+      new ActionRowBuilder().addComponents(presetSelect),
       new ActionRowBuilder().addComponents(registerButton),
     ],
   };
@@ -262,12 +289,37 @@ export async function handleRecurrenceSelect(interaction) {
   const draft = getActiveDraft(interaction);
   if (!draft) return replyDraftExpired(interaction);
 
-  const recurrenceType = interaction.values[0]; // 'once' | 'daily' | 'weekly'
-  draft.recurrenceType = recurrenceType;
-  draft.recurrenceValue = recurrenceType === 'weekly' ? String(draft.weekday) : null;
+  draft.recurrenceType = interaction.values[0]; // 'once' | 'daily' | 'weekly'
   draft.updatedAt = Date.now();
 
   await interaction.update(buildDraftMessage(draft));
+}
+
+export async function handleDateTimePresetSelect(interaction) {
+  const draft = getActiveDraft(interaction);
+  if (!draft) return replyDraftExpired(interaction);
+
+  const presetValue = interaction.values[0];
+  const preset = DATETIME_PRESETS.find((p) => p.value === presetValue);
+  draft.parsedDateTime = computePresetDateTime(presetValue, new Date());
+  draft.selectedPreset = preset?.label ?? presetValue;
+  draft.updatedAt = Date.now();
+
+  await interaction.update(buildDraftMessage(draft));
+}
+
+// 登録時点の日時決定: プリセット選択済みならそれを優先し、
+// 無ければモーダルの自由入力欄をchrono-nodeでパースする
+function resolveDraftDateTime(draft) {
+  if (draft.parsedDateTime) {
+    return { date: draft.parsedDateTime };
+  }
+  if (draft.customDateTimeText) {
+    const parsed = parseReminderDateTime(draft.customDateTimeText, new Date());
+    if (parsed) return { date: parsed.date };
+    return { error: 'invalid_custom' };
+  }
+  return { error: 'missing' };
 }
 
 export async function handleRegisterButton(interaction) {
@@ -282,11 +334,32 @@ export async function handleRegisterButton(interaction) {
     return;
   }
 
+  const resolved = resolveDraftDateTime(draft);
+  if (resolved.error === 'invalid_custom') {
+    await interaction.reply({
+      content: `日時を解析できませんでした:「${draft.customDateTimeText}」\nプリセットを選ぶか、別の書き方でもう一度 /remind add を実行してください。`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (resolved.error === 'missing') {
+    await interaction.reply({
+      content: '日時プリセットを選ぶか、カスタム日時を入力してください。',
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  const date = resolved.date;
+  const timeOfDay = formatTimeOfDay(date);
+  const weekday = date.getDay();
+  const recurrenceValue = draft.recurrenceType === 'weekly' ? String(weekday) : null;
+
   const nextTriggerAt = computeInitialNextTriggerAt({
     recurrenceType: draft.recurrenceType,
-    date: draft.date,
-    timeOfDay: draft.timeOfDay,
-    weekday: draft.weekday,
+    date,
+    timeOfDay,
+    weekday,
     now: new Date(),
   });
 
@@ -296,8 +369,8 @@ export async function handleRegisterButton(interaction) {
     userId: draft.userId,
     content: draft.content,
     recurrenceType: draft.recurrenceType,
-    recurrenceValue: draft.recurrenceValue,
-    timeOfDay: draft.timeOfDay,
+    recurrenceValue,
+    timeOfDay,
     timezone: config.timezone,
     nextTriggerAt,
     mentionTargets: draft.mentionTargets,
@@ -316,7 +389,7 @@ export async function handleRegisterButton(interaction) {
       { name: 'ID', value: String(id), inline: true },
       {
         name: '繰り返し',
-        value: recurrenceLabel(draft.recurrenceType, draft.recurrenceValue),
+        value: recurrenceLabel(draft.recurrenceType, recurrenceValue),
         inline: true,
       },
       {

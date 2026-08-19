@@ -43,6 +43,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId === 'remind_recurrence_select') {
         await remind.handleRecurrenceSelect(interaction);
+      } else if (interaction.customId === 'datetime_preset') {
+        await remind.handleDateTimePresetSelect(interaction);
       }
       return;
     }
