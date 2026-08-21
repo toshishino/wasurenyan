@@ -23,6 +23,7 @@ import {
 import {
   parseReminderDateTime,
   formatDateTimeJa,
+  formatDateTimeShortJa,
   formatTimeOfDay,
   recurrenceLabel,
   computeInitialNextTriggerAt,
@@ -33,10 +34,14 @@ import { formatMentionTarget } from '../mentions.js';
 import { config } from '../config.js';
 
 // modal送信〜登録ボタン押下までの一時的な下書きを保持する
-// (メッセージid -> { content, customDateTimeText, parsedDateTime, selectedPreset, guildId, userId,
-//                    defaultChannelId, channelId, mentionTargets, recurrenceType, updatedAt })
+// (メッセージid -> { content, customDateTimeText, parsedDateTime, selectedPreset, dateTimeSource,
+//                    customDateTimeInvalid, guildId, userId, defaultChannelId, channelId,
+//                    mentionTargets, recurrenceType, updatedAt })
 const draftReminders = new Map();
 const DRAFT_TTL_MS = 10 * 60 * 1000;
+
+// 何も選ばず登録しても妥当な内容になるよう、日時プリセットのデフォルトは「1時間後」
+const DEFAULT_PRESET_VALUE = 'in_1_hour';
 
 // リマインド内容欄(remind_content)のsetMaxLengthと必ず一致させる
 const CONTENT_MAX_LENGTH = 500;
@@ -136,6 +141,33 @@ async function showAddModal(interaction, { initialContent = '' } = {}) {
   await interaction.showModal(modal);
 }
 
+// モーダル送信直後の日時デフォルトを決定する:
+// カスタム入力があればそれを優先してパースし、無い/パース不可ならプリセット「1時間後」を採用する
+function resolveInitialDateTime(customDateTimeText, now = new Date()) {
+  const defaultPreset = DATETIME_PRESETS.find((p) => p.value === DEFAULT_PRESET_VALUE);
+  const fallback = {
+    parsedDateTime: computePresetDateTime(defaultPreset.value, now),
+    selectedPreset: defaultPreset.label,
+    dateTimeSource: 'preset',
+  };
+
+  if (!customDateTimeText) {
+    return { ...fallback, customDateTimeInvalid: false };
+  }
+
+  const parsed = parseReminderDateTime(customDateTimeText, now);
+  if (parsed) {
+    return {
+      parsedDateTime: parsed.date,
+      selectedPreset: null,
+      dateTimeSource: 'custom',
+      customDateTimeInvalid: false,
+    };
+  }
+
+  return { ...fallback, customDateTimeInvalid: true };
+}
+
 export async function handleModalSubmit(interaction) {
   if (interaction.customId !== 'remind_add_modal') return;
 
@@ -143,17 +175,21 @@ export async function handleModalSubmit(interaction) {
   const customDateTimeText =
     interaction.fields.getTextInputValue('remind_datetime').trim() || null;
 
+  const initial = resolveInitialDateTime(customDateTimeText);
+
   const draft = {
     content,
     customDateTimeText,
-    parsedDateTime: null,
-    selectedPreset: null,
+    parsedDateTime: initial.parsedDateTime,
+    selectedPreset: initial.selectedPreset,
+    dateTimeSource: initial.dateTimeSource,
+    customDateTimeInvalid: initial.customDateTimeInvalid,
     guildId: interaction.guildId,
     userId: interaction.user.id,
     defaultChannelId: interaction.channelId,
     channelId: interaction.channelId,
-    mentionTargets: [],
-    recurrenceType: null,
+    mentionTargets: [{ id: interaction.user.id, type: 'user' }],
+    recurrenceType: 'once',
     updatedAt: Date.now(),
   };
 
@@ -166,46 +202,44 @@ export async function handleModalSubmit(interaction) {
   draftReminders.set(response.resource.message.id, draft);
 }
 
-// 繰り返し(weekly)の曜日は日時が確定するまで決まらないため、都度算出する
+// 繰り返し(weekly)の曜日はdraft.parsedDateTimeから都度算出する(常に確定済み)
 function currentRecurrenceValue(draft) {
   if (draft.recurrenceType !== 'weekly') return null;
-  if (!draft.parsedDateTime) return null;
   return String(draft.parsedDateTime.getDay());
 }
 
-function formatDraftDateTimeField(draft) {
-  if (draft.parsedDateTime) {
-    return `${formatDateTimeJa(draft.parsedDateTime)}\n(プリセット: ${draft.selectedPreset})`;
-  }
-  if (draft.customDateTimeText) {
-    return `カスタム入力:「${draft.customDateTimeText}」\n(登録時に解析されます)`;
-  }
-  return '未選択（プリセットまたはカスタム入力が必要です）';
-}
-
-function formatDraftRecurrenceField(draft) {
-  if (!draft.recurrenceType) return '未選択（登録に必須です）';
-  if (draft.recurrenceType === 'weekly' && !draft.parsedDateTime) {
-    return '毎週（曜日は日時確定後に決まります）';
-  }
-  return recurrenceLabel(draft.recurrenceType, currentRecurrenceValue(draft));
-}
-
-function buildDraftMessage(draft) {
+// フォローアップメッセージ本文に表示する「現在の設定」の要約テキスト
+function buildDraftSummaryText(draft) {
+  const relativeLabel =
+    draft.dateTimeSource === 'custom'
+      ? `カスタム「${draft.customDateTimeText}」`
+      : draft.selectedPreset;
   const mentionText =
     draft.mentionTargets.length > 0
       ? draft.mentionTargets.map(formatMentionTarget).join(' ')
       : 'なし';
+  const recurrenceText = recurrenceLabel(draft.recurrenceType, currentRecurrenceValue(draft));
 
+  const lines = [
+    `📅 日時: ${relativeLabel}（${formatDateTimeShortJa(draft.parsedDateTime)}）`,
+    `📢 投稿先: <#${draft.channelId}>`,
+    `🔔 メンション: ${mentionText}`,
+    `🔁 繰り返し: ${recurrenceText}`,
+  ];
+
+  if (draft.customDateTimeInvalid) {
+    lines.push(
+      `⚠️ カスタム日時「${draft.customDateTimeText}」を解釈できなかったため、デフォルト値を使用しています`
+    );
+  }
+
+  return lines.join('\n');
+}
+
+function buildDraftMessage(draft) {
   const embed = new EmbedBuilder()
     .setTitle('リマインド内容の確認')
-    .addFields(
-      { name: '内容', value: draft.content },
-      { name: '日時', value: formatDraftDateTimeField(draft) },
-      { name: '投稿先チャンネル', value: `<#${draft.channelId}>` },
-      { name: 'メンション対象', value: mentionText },
-      { name: '繰り返し', value: formatDraftRecurrenceField(draft) }
-    )
+    .setDescription(`**内容**\n${draft.content}\n\n${buildDraftSummaryText(draft)}`)
     .setFooter({ text: '各項目を選択し、「登録」ボタンで確定してください' })
     .setColor(0x8bc9ff);
 
@@ -257,12 +291,13 @@ function buildDraftMessage(draft) {
       }
     );
 
+  const presetNow = new Date();
   const presetSelect = new StringSelectMenuBuilder()
     .setCustomId('datetime_preset')
     .setPlaceholder('日時プリセットを選択')
     .addOptions(
       DATETIME_PRESETS.map((preset) => ({
-        label: preset.label,
+        label: `${preset.label} (${formatDateTimeShortJa(computePresetDateTime(preset.value, presetNow))})`,
         value: preset.value,
         default: draft.selectedPreset === preset.label,
       }))
@@ -338,54 +373,18 @@ export async function handleDateTimePresetSelect(interaction) {
   const preset = DATETIME_PRESETS.find((p) => p.value === presetValue);
   draft.parsedDateTime = computePresetDateTime(presetValue, new Date());
   draft.selectedPreset = preset?.label ?? presetValue;
+  draft.dateTimeSource = 'preset';
+  draft.customDateTimeInvalid = false;
   draft.updatedAt = Date.now();
 
   await interaction.update(buildDraftMessage(draft));
-}
-
-// 登録時点の日時決定: プリセット選択済みならそれを優先し、
-// 無ければモーダルの自由入力欄をchrono-nodeでパースする
-function resolveDraftDateTime(draft) {
-  if (draft.parsedDateTime) {
-    return { date: draft.parsedDateTime };
-  }
-  if (draft.customDateTimeText) {
-    const parsed = parseReminderDateTime(draft.customDateTimeText, new Date());
-    if (parsed) return { date: parsed.date };
-    return { error: 'invalid_custom' };
-  }
-  return { error: 'missing' };
 }
 
 export async function handleRegisterButton(interaction) {
   const draft = getActiveDraft(interaction);
   if (!draft) return replyDraftExpired(interaction);
 
-  if (!draft.recurrenceType) {
-    await interaction.reply({
-      content: '繰り返し設定を選んでください。',
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  const resolved = resolveDraftDateTime(draft);
-  if (resolved.error === 'invalid_custom') {
-    await interaction.reply({
-      content: `日時を解析できませんでした:「${draft.customDateTimeText}」\nプリセットを選ぶか、別の書き方でもう一度 /remind add を実行してください。`,
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-  if (resolved.error === 'missing') {
-    await interaction.reply({
-      content: '日時プリセットを選ぶか、カスタム日時を入力してください。',
-      flags: MessageFlags.Ephemeral,
-    });
-    return;
-  }
-
-  const date = resolved.date;
+  const date = draft.parsedDateTime;
   const timeOfDay = formatTimeOfDay(date);
   const weekday = date.getDay();
   const recurrenceValue = draft.recurrenceType === 'weekly' ? String(weekday) : null;

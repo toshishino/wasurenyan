@@ -33,6 +33,16 @@ export function formatDateTimeJa(date) {
   }).format(date);
 }
 
+export function formatDateTimeShortJa(date) {
+  return new Intl.DateTimeFormat('ja-JP', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
+
 export function weekdayLabel(day) {
   return `${WEEKDAY_LABELS[day]}曜`;
 }
