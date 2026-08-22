@@ -32,6 +32,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await remind.handleModalSubmit(interaction);
       return;
     }
+
+    if (interaction.isButton()) {
+      await remind.handleButtonInteraction(interaction);
+      return;
+    }
   } catch (err) {
     console.error('インタラクション処理中にエラーが発生しました:', err);
     const errorMessage = { content: 'エラーが発生しました。', ephemeral: true };
