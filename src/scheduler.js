@@ -32,12 +32,12 @@ async function fireReminder(client, reminder) {
       }
       const mentionPrefix = buildMentionPrefix(mentionTargets);
       await channel.send(
-        `${mentionPrefix}🐾 <@${reminder.user_id}> リマインド: ${reminder.content}`
+        `${mentionPrefix}🐾 <@${reminder.user_id}> リマインドにゃん: ${reminder.content}`
       );
     }
   } catch (err) {
     console.error(
-      `[scheduler] リマインド#${reminder.id}の送信に失敗しました:`,
+      `[scheduler] リマインドにゃん#${reminder.id}の送信に失敗しました:`,
       err
     );
   }
