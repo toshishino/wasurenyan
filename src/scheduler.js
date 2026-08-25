@@ -5,7 +5,7 @@ import {
   updateNextTrigger,
 } from './db.js';
 import { computeFollowingTriggerAt } from './datetime.js';
-import { buildMentionPrefix } from './mentions.js';
+import { buildMentionPrefix, dedupeMentionTargets } from './mentions.js';
 
 export function startScheduler(client) {
   cron.schedule('* * * * *', () => checkAndFireReminders(client));
@@ -30,9 +30,9 @@ async function fireReminder(client, reminder) {
       } catch {
         mentionTargets = [];
       }
-      const mentionPrefix = buildMentionPrefix(mentionTargets);
+      const mentionPrefix = buildMentionPrefix(dedupeMentionTargets(mentionTargets));
       await channel.send(
-        `${mentionPrefix}🐾 <@${reminder.user_id}> リマインドにゃん: ${reminder.content}`
+        `${mentionPrefix}🐾 リマインドにゃん: ${reminder.content}`
       );
     }
   } catch (err) {

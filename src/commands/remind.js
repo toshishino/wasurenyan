@@ -28,7 +28,7 @@ import {
   computePresetDateTime,
   parseReminderDateTime,
 } from '../datetime.js';
-import { formatMentionTarget } from '../mentions.js';
+import { formatMentionTarget, dedupeMentionTargets } from '../mentions.js';
 import { config } from '../config.js';
 
 // リマインド内容欄(remind_content)のsetMaxLengthと必ず一致させる
@@ -336,12 +336,14 @@ async function handleAddModalSubmit(interaction) {
   const channelId = channels.first().id;
 
   const mentionables = interaction.fields.getSelectedMentionables('remind_mention_select', false);
-  const mentionTargets = mentionables
-    ? [
-        ...mentionables.users.map((user) => ({ id: user.id, type: 'user' })),
-        ...mentionables.roles.map((role) => ({ id: role.id, type: 'role' })),
-      ]
-    : [];
+  const mentionTargets = dedupeMentionTargets(
+    mentionables
+      ? [
+          ...mentionables.users.map((user) => ({ id: user.id, type: 'user' })),
+          ...mentionables.roles.map((role) => ({ id: role.id, type: 'role' })),
+        ]
+      : []
+  );
 
   if (presetValue === 'custom') {
     const draftId = storeCustomDraft({
