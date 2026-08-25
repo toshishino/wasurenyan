@@ -475,7 +475,7 @@ async function handleList(interaction) {
 
 async function handleDelete(interaction) {
   const id = interaction.options.getInteger('id', true);
-  const deleted = deleteReminderByOwner(id, interaction.user.id);
+  const deleted = deleteReminderByOwner(id, interaction.user.id, interaction.guildId);
 
   if (!deleted) {
     await interaction.reply({

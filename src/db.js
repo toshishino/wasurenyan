@@ -79,11 +79,11 @@ export function listRemindersByUser(guildId, userId) {
   return stmt.all(guildId, userId);
 }
 
-export function deleteReminderByOwner(id, userId) {
+export function deleteReminderByOwner(id, userId, guildId) {
   const stmt = db.prepare(`
-    DELETE FROM reminders WHERE id = ? AND user_id = ?
+    DELETE FROM reminders WHERE id = ? AND user_id = ? AND guild_id = ?
   `);
-  const result = stmt.run(id, userId);
+  const result = stmt.run(id, userId, guildId);
   return result.changes > 0;
 }
 
